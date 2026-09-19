@@ -27,6 +27,7 @@ python pplx_billing.py login   # one-time sign-in, saved to ~/.pplx-billing-prof
 | Goal | Command |
 |---|---|
 | See remaining credits | `python check_credits.py` (exit 3 when below `$PPLX_LOW_CREDITS`, default 500) |
+| Did my one-time bonus land? | `python bonus_audit.py --email you@example.com` (exit 3 + drafts `support_request.md` if missing/expired; `--expect 8000` for Enterprise Pro, `35000` for Max) |
 | Change card (type it yourself) | `python pplx_billing.py card` |
 | Change card, fill from Keychain | `python pplx_billing.py card --keychain` |
 | Buy credits | `python pplx_billing.py buy --credits 5000` |
@@ -41,6 +42,19 @@ security add-generic-password -a pplx -s pplx-billing-card -U \
 
 The script navigates and fills; it never presses Save, Add, or Pay. You review
 and click the final button. Add `--pause` to get the Playwright Inspector.
+
+## Missing bonus credits
+
+Pro's 4,000 / Enterprise Pro's 8,000 / Max's 35,000 bonus is one-time, one per
+account, and expires 30 days after grant. There is no self-serve way to claim
+or re-issue it — only support can. `bonus_audit.py` reads the same read-only
+credits endpoint, lists every grant with its type / granted / expiry dates,
+and, if no active promotional grant exists, writes `support_request.md` with
+the evidence attached so you can paste it into Help > Contact Support.
+Reddit reports show support does restore missing grants, typically in 1-3 weeks.
+
+From a Perplexity Computer session with a vault credential injected via HTTPS
+proxy, run it with `--proxy` (no cookie lookup).
 
 ## After the card is in
 
