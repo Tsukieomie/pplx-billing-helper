@@ -26,60 +26,18 @@ falls back to pausing so you can finish by hand. Nothing here is a Perplexity AP
 """
 from __future__ import annotations
 
-import argparse
-import json
-import os
 import re
-import subprocess
-import sys
-import time
-from pathlib import Path
 
-from playwright.sync_api import Page, TimeoutError as PWTimeout, sync_playwright
+from playwright.sync_api import Page, TimeoutError as PWTimeout
 
-PROFILE_DIR = Path(os.getenv("PPLX_PROFILE_DIR", Path.home() / ".pplx-billing-profile"))
-USAGE_URL = "https://www.perplexity.ai/account/usage"
+from pplx_ui import (BUTTON, base_parser, browser, click_first, ensure_logged_in, handoff,
+                     keychain_secret, log)
+
 ACCOUNT_URL = "https://www.perplexity.ai/settings/account"
-BUTTON = re.compile
-
-
-def log(msg: str) -> None:
-    print(f"[pplx-billing] {msg}", flush=True)
-
-
-# ---------- helpers -------------------------------------------------------
-
-def click_first(page: Page, patterns: list[str], timeout_ms: int = 8000) -> bool:
-    """Click the first visible button/link whose text matches any pattern."""
-    for pat in patterns:
-        for role in ("button", "link", "menuitem"):
-            loc = page.get_by_role(role, name=BUTTON(pat, re.I))
-            try:
-                loc.first.wait_for(state="visible", timeout=timeout_ms)
-                loc.first.click()
-                log(f"clicked {role} /{pat}/")
-                return True
-            except PWTimeout:
-                continue
-    return False
-
-
-def ensure_logged_in(page: Page) -> None:
-    page.goto(USAGE_URL, wait_until="domcontentloaded")
-    page.wait_for_timeout(1500)
-    if re.search(r"/(auth|signin|login)", page.url) or page.get_by_role(
-            "button", name=BUTTON(r"continue with|sign in|log in", re.I)).count():
-        log("Not signed in. Complete sign-in in the Chrome window (magic link / code)...")
-        page.wait_for_url(re.compile(r"perplexity\.ai/(account|settings|$)"), timeout=10 * 60 * 1000)
-        page.goto(USAGE_URL, wait_until="domcontentloaded")
-        log("Signed in; session saved to profile.")
 
 
 def keychain_card() -> dict:
-    out = subprocess.run(
-        ["security", "find-generic-password", "-s", "pplx-billing-card", "-w"],
-        capture_output=True, text=True, check=True).stdout.strip()
-    card = json.loads(out)
+    card = keychain_secret("pplx-billing-card", as_json=True)
     for k in ("number", "exp", "cvc"):
         if k not in card:
             raise SystemExit(f"Keychain item missing '{k}'")
@@ -135,13 +93,13 @@ def cmd_card(page: Page, a) -> None:
     if a.keychain:
         card = keychain_card()
         if fill_stripe_card(page, card):
-            log("Card fields filled from Keychain. Review the form, then click Save/Add yourself "
-                "(the script never submits a payment form).")
+            msg = ("Card fields filled from Keychain. Review the form, then click Save/Add yourself "
+                   "(the script never submits a payment form).")
         else:
-            log("Couldn't find Stripe card fields automatically — form is open, finish by hand.")
+            msg = "Couldn't find Stripe card fields automatically — form is open, finish by hand."
     else:
-        log("Card form should be open. Type the card in the window; nothing was auto-filled.")
-    page.pause() if a.pause else page.wait_for_timeout(10 * 60 * 1000)
+        msg = "Card form should be open. Type the card in the window; nothing was auto-filled."
+    handoff(page, msg, a.pause)
 
 
 def cmd_buy(page: Page, a) -> None:
@@ -152,44 +110,31 @@ def cmd_buy(page: Page, a) -> None:
         page.wait_for_timeout(1500)
         if not click_first(page, [rf"\b{a.credits:,}\b", rf"\b{a.credits}\b"], 5000):
             log(f"Couldn't pick {a.credits}; choose an amount in the window.")
-    log("Confirm the purchase in the window. The script does not press the final Pay button.")
-    page.pause() if a.pause else page.wait_for_timeout(10 * 60 * 1000)
+    handoff(page, "Confirm the purchase in the window. The script does not press the final Pay button.", a.pause)
 
 
 def cmd_refill(page: Page, a) -> None:
     ensure_logged_in(page)
     try:
         page.get_by_text(BUTTON(r"auto[- ]?refill", re.I)).first.scroll_into_view_if_needed(timeout=8000)
-        log("Auto-refill controls in view. Toggle on, set refill amount and monthly cap.")
+        msg = "Auto-refill controls in view. Toggle on, set refill amount and monthly cap."
     except PWTimeout:
-        log("Auto-refill section not found; page left open.")
-    page.pause() if a.pause else page.wait_for_timeout(10 * 60 * 1000)
+        msg = "Auto-refill section not found; page left open."
+    handoff(page, msg, a.pause)
 
 
 COMMANDS = {"login": cmd_login, "card": cmd_card, "buy": cmd_buy, "refill": cmd_refill}
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = base_parser(__doc__)
     ap.add_argument("command", choices=COMMANDS)
     ap.add_argument("--keychain", action="store_true", help="fill card from Keychain item pplx-billing-card")
     ap.add_argument("--credits", type=int, help="credit pack size to pre-select for 'buy'")
-    ap.add_argument("--pause", action="store_true", help="open Playwright Inspector at the end")
-    ap.add_argument("--headless", action="store_true")
     a = ap.parse_args()
 
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            str(PROFILE_DIR), channel="chrome", headless=a.headless,
-            viewport={"width": 1280, "height": 900},
-            args=["--disable-blink-features=AutomationControlled"])
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        try:
-            COMMANDS[a.command](page, a)
-        finally:
-            time.sleep(1)
-            ctx.close()
+    with browser(headless=a.headless) as page:
+        COMMANDS[a.command](page, a)
 
 
 if __name__ == "__main__":
