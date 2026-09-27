@@ -12,6 +12,7 @@ click the final button.
 | `pplx_billing.py` | Billing: change card, buy credits, auto-refill. |
 | `pplx_connector.py` | Account settings → Connectors: list, and fill the "+ Custom connector → Remote" form. |
 | `check_credits.py` | Read-only credit balance from the terminal (no browser). |
+| `pplx_harness.py` | Same connector flow, ported to the Perplexity Computer browser harness so it runs from a Computer sandbox. |
 
 There is no Perplexity write endpoint for payments — every open-source project
 that touches Perplexity billing (CodexBar, TokenBar, usagebar, ceiling, tidemark,
@@ -76,6 +77,29 @@ Pair it with a local MCP server plus tunnel (e.g. `cloudflared tunnel --url
 http://localhost:8000`) to register a Filesystem Bridge without pasting the key
 into chat. Quick `trycloudflare.com` URLs change on every restart; edit the
 connector via its **⋮** menu when that happens.
+
+## Running from a Perplexity Computer sandbox
+
+Playwright Chromium launched inside the sandbox is stopped by Cloudflare's bot
+check on perplexity.ai, but the harness's cloud browser passes it. `pplx_harness.py`
+re-implements the connector flow on the harness helpers (accessibility tree +
+refs) so the agent can run it directly:
+
+```python
+exec(open("/home/user/workspace/pplx-billing-helper/pplx_harness.py").read())
+H = Harness(globals())
+H.open("connectors")
+H.login_start("you@example.com")   # Perplexity emails a one-time code
+H.login_code("123456")             # you relay the code
+H.connector_add("Filesystem Bridge", "https://host/mcp", auth="api-key",
+                transport="http", api_key="...")   # fills, screenshots, stops
+H.submit()                         # only after you approve the screenshot
+```
+
+Trade-offs versus the Mac scripts: no Keychain (the API key is typed by the
+agent, so use a key you generated for this purpose), the session lives only in
+the throwaway cloud browser, and the agent presses Add on your explicit go-ahead
+instead of you clicking it.
 
 ## Build your own command
 
